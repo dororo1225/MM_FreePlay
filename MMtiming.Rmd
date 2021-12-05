@@ -1,0 +1,58 @@
+---
+title: "MM_FreePlay"
+author: "Hiroki YAMAMOTO"
+date: "2021/11/30"
+output: html_document
+---
+```{r}
+library(tidyverse)
+library(here)
+library(lubridate)
+```
+
+```{r}
+read_csv("MMtime.csv", col_types = "cc") %>% 
+  mutate(MM_timestamp = as.numeric(ms(Mmtime)) * 1000*1000,
+         id = row_number()) %>% 
+  select(!Mmtime) -> d_time
+
+read_csv("united.csv", col_types = "cDcccdddddcddddddddlllld") %>% 
+  select(participant_name, image_name, frame_id, ends_with("timestamp"), gaze, face_detect, Overlap, MM) -> df
+
+w_size <- 3 # window size(seconds)
+```
+
+```{r}
+tibble(N_window = numeric(),
+       Prop_NA = numeric(),
+       Prop_Overlap = numeric()) -> d_mmtime
+
+for (i in 1:nrow(d_time)){
+  d_time %>% 
+    filter(id == i) -> d_target
+  df %>% 
+    filter(participant_name == d_target$participant_name) %>% 
+    mutate(diff_time = movie_timestamp - d_target$MM_timestamp) %>% 
+    filter(diff_time > - w_size * 1000 * 1000 & diff_time < w_size * 1000 * 1000) %>% 
+    summarise(N_window = n(),
+              Prop_NA = sum(is.na(Overlap))/N_window,
+              Prop_Overlap = if_else(Prop_NA == 1, NA_real_, sum(Overlap, na.rm = TRUE)/N_window)) -> d_tmp
+  bind_rows(d_mmtime, d_tmp) -> d_mmtime
+}
+
+bind_cols(d_time, d_mmtime) %>% 
+  left_join(distinct(select(df, participant_name, MM)), by = "participant_name") -> df_mm
+```
+
+```{r}
+df_mm %>% 
+  group_by(participant_name) %>%
+  summarise(MM = first(MM),
+            Utterance_count = n(),
+            NA_count = sum(is.na(Prop_Overlap)),
+            Cooccurence_count = if_else(Utterance_count == NA_count, NA_integer_, sum(Prop_Overlap > 0, na.rm = TRUE)),
+            Prop_Cooccurence = Cooccurence_count / Utterance_count) %>% View() 
+  ggplot(aes(x = MM, y = Prop_Cooccurence)) +
+  geom_point()
+```
+
