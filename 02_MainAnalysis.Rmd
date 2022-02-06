@@ -1,0 +1,188 @@
+---
+title: "02_MainAnalysis"
+author: "Hiroki YAMAMOTO"
+date: "2022/2/6"
+output: html_document
+---
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(here)
+library(lme4)
+library(car)
+library(boot)
+library(performance)
+library(effectsize)
+library(parameters)
+library(ggpubr)
+options(mc.cores = parallel::detectCores()) 
+```
+
+```{r}
+# 関数定義
+inv_logit <- function(x){1/(1 + exp(-x))}
+
+myFunc <- function(mm) {
+    # forgot the re.form argument on first try
+    predict(mm, newdata = nd, type = "response", re.form = NA)
+}
+```
+
+
+# 除外する参加者のIDを指定
+```{r}
+# participant_exclusion
+par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
+```
+
+- Participant_test04:顔が一度も検出されなかった
+-
+-
+-
+
+# データ整形
+```{r}
+read_csv("ParticipantInformation.csv", col_types = "cdcdddccddddddddddddddd") %>% 
+  filter(type == "test") %>% # 予備実験の参加者を除外
+  filter(!participant_name %in% par_remove) -> d_participant 
+
+# SESの算出
+d_participant %>% 
+  dplyr::select(participant_name, starts_with("Q3"), starts_with("Q4")) %>% 
+  pivot_longer(ends_with("_1"), names_to = "parent") %>% 
+  mutate(parent = if_else(parent == "Q3_1", "father", "mother"),
+         value2 = if_else(value >= 4, value - 1, value),
+         category = case_when(value2 == 1 ~ "中学校",
+                              value2 == 2 ~ "高等学校",
+                              value2 == 3 ~ "数年間の大学",
+                              value2 == 4 ~ "4年制大学",
+                              value2 == 5 ~ "大学院"),
+         category = fct_reorder(category, value2)) -> d_SES
+
+d_SES %>%
+  arrange(participant_name, parent) %>% 
+  group_by(participant_name) %>% 
+  summarise(SES = mean(value2, na.rm = TRUE),
+            .groups = "drop") %>% 
+  mutate(SES_z = scale(SES, center = TRUE, scale = TRUE)[, 1]) -> df_SES
+
+read_csv("united.csv", col_types = "cDcccdddddcddddddddlllld") %>% 
+  group_by(participant_name) %>% 
+  summarise(Total_image = n(),
+            Gaze_image = sum(gaze, na.rm = TRUE),
+            Face_image = sum(face_detect, na.rm = TRUE),
+            Both_image = sum(!is.na(Overlap)),
+            Overlap_image = sum(Overlap, na.rm = TRUE),
+            Prop_FaceLook = Overlap_image/Both_image) -> d_gaze
+
+d_participant %>% 
+  left_join(df_SES, by = "participant_name") %>% 
+  mutate(Nonattuned_comment = mind_comment - app_comment,
+         PropNonattuned = Nonattuned_comment / Total_comment * 100) %>% 
+  select(participant_name, Month, SES, SES_z, MM, PropNonattuned, Total_comment, app_comment, Nonattuned_comment) %>% 
+  left_join(d_gaze, by = "participant_name") -> df
+
+df %>% 
+  mutate(MM_z = scale(MM, center = TRUE, scale = TRUE)[,1],
+         PropNonattuned_z = scale(PropNonattuned, center = TRUE, scale = TRUE)[,1]) -> df
+```
+# Statistical Analysis(GLMM)
+## MM
+```{r}
+fit_MM <- glmer(cbind(Overlap_image, Both_image - Overlap_image) ~ MM + SES + (1|participant_name), data = df, family = "binomial")
+check_overdispersion(fit_MM)
+Anova(fit_MM)
+summary(fit_MM)
+model_parameters(fit_MM, standardize = "refit")
+```
+
+```{r, eval=FALSE}
+expand_grid(MM = seq(min(df$MM), max(df$MM), length = 100),
+            SES = mean(df$SES)) %>% 
+  as_tibble() -> nd
+
+bigBoot_MM <- bootMer(fit_MM, myFunc, nsim = 1000, parallel = "multicore", ncpus = 4)
+save(bigBoot_MM, file = here("BootData", "bigBoot_MM.RData"))
+```
+
+```{r}
+if (!exists("bigBoot_MM")) {
+    load("BootData/bigBoot_MM.Rdata")
+}
+
+expand_grid(MM = seq(min(df$MM), max(df$MM), length = 100),
+            SES = mean(df$SES)) -> nd_MM
+envPred <- envelope(bigBoot_MM, level = 0.95)
+nd_MM$upper.point <- envPred$point[1, ]
+nd_MM$lower.point <- envPred$point[2, ]
+```
+
+## Nonattuned
+```{r}
+fit_Nonattuned <- glmer(cbind(Overlap_image, Both_image - Overlap_image) ~ PropNonattuned + SES + (1|participant_name), data = df, family = "binomial")
+check_overdispersion(fit_Nonattuned)
+Anova(fit_Nonattuned)
+summary(fit_Nonattuned)
+model_parameters(fit_Nonattuned, standardize = "refit")
+```
+
+```{r, eval=FALSE}
+expand_grid(PropNonattuned = seq(min(df$PropNonattuned), max(df$PropNonattuned), length = 100),
+            SES = mean(df$SES)) -> nd
+
+bigBoot_Nonattuned <- bootMer(fit_Nonattuned, myFunc, nsim = 1000, parallel = "multicore", ncpus = 4)
+save(bigBoot_Nonattuned, file = here("BootData", "bigBoot_Nonattuned.RData"))
+```
+
+```{r}
+if (!exists("bigBoot_Nonattuned")) {
+    load("BootData/bigBoot_Nonattuned.Rdata")
+}
+
+expand_grid(PropNonattuned = seq(min(df$PropNonattuned), max(df$PropNonattuned), length = 100),
+            SES = mean(df$SES)) -> nd_Nonattuned
+envPred <- envelope(bigBoot_Nonattuned, level = 0.95)
+nd_Nonattuned$upper.point <- envPred$point[1, ]
+nd_Nonattuned$lower.point <- envPred$point[2, ]
+```
+
+## Visualization
+```{r, fig.width=10}
+expand_grid(MM = seq(min(df$MM), max(df$MM), length = 100),
+            SES = mean(df$SES)) %>% 
+  mutate(q_MM = predict(fit_MM, newdata = ., type = "response", re.form = NA)) -> df_predict_MM
+
+ggplot(df, aes(x = MM)) +
+  geom_point(aes(y = Prop_FaceLook, size = Both_image), alpha = 0.5) +
+  geom_ribbon(data = nd_MM, aes(ymax = upper.point, ymin = lower.point), alpha = 0.25, fill = "#F8766D") +
+  geom_line(data = df_predict_MM, aes(y = q_MM), lwd = 1, color = "#F8766D") +
+  labs(x = "Proportion of Appropriate comments (%)", y = "Proportion of face looking", size = "# of images with face & gaze") +
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12)) -> gp1
+
+expand_grid(PropNonattuned = seq(min(df$PropNonattuned), max(df$PropNonattuned), length = 100),
+            SES = mean(df$SES)) %>% 
+  mutate(q_Nonattuned = predict(fit_Nonattuned, newdata = ., type = "response", re.form = NA)) -> df_predict_Nonattuned
+
+ggplot(df, aes(x = PropNonattuned)) +
+  geom_point(aes(y = Prop_FaceLook, size = Both_image), alpha = 0.5) +
+  geom_ribbon(data = nd_Nonattuned, aes(ymax = upper.point, ymin = lower.point), alpha = 0.25, fill = "#00BFC4") +
+  geom_line(data = df_predict_Nonattuned, aes(y = q_Nonattuned), lwd = 1, color = "#00BFC4") +
+  labs(x = "Proportion of Nonattuned comments (%)", y = "Proportion of face looking", size = "# of images with face & gaze") +
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12)) -> gp2
+ggarrange(gp1, gp2, common.legend = TRUE) 
+```
+
+```{r, echo=FALSE, message=FALSE}
+ggarrange(gp1, gp2, common.legend = TRUE) %>% 
+  ggexport(filename = here("Figure", "MainAnalysis_Freq.jpg"), res = 300, width = 3000, height = 1200)
+```
+

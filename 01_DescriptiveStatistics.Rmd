@@ -1,0 +1,191 @@
+---
+title: "Analysis1"
+author: "Hiroki YAMAMOTO"
+date: "2022/2/5"
+output: html_document
+---
+```{r, message=FALSE}
+library(tidyverse)
+library(here)
+library(knitr)
+library(VennDiagram)
+options(mc.cores = parallel::detectCores()) 
+```
+
+# 除外する参加者のIDを指定
+```{r}
+# participant_exclusion
+par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
+```
+
+- Participant_test04:顔が一度も検出されなかった
+-
+-
+-
+
+# データ整形
+```{r}
+read_csv("ParticipantInformation.csv", col_types = "cdcdddccddddddddddddddd") %>% 
+  filter(type == "test") %>% # 予備実験の参加者を除外
+  filter(!participant_name %in% par_remove) -> d_participant 
+
+# SESの算出
+d_participant %>% 
+  dplyr::select(participant_name, starts_with("Q3"), starts_with("Q4")) %>% 
+  pivot_longer(ends_with("_1"), names_to = "parent") %>% 
+  mutate(parent = if_else(parent == "Q3_1", "father", "mother"),
+         value2 = if_else(value >= 4, value - 1, value),
+         category = case_when(value2 == 1 ~ "中学校",
+                              value2 == 2 ~ "高等学校",
+                              value2 == 3 ~ "数年間の大学",
+                              value2 == 4 ~ "4年制大学",
+                              value2 == 5 ~ "大学院"),
+         category = fct_reorder(category, value2)) -> d_SES
+
+d_SES %>%
+  arrange(participant_name, parent) %>% 
+  group_by(participant_name) %>% 
+  summarise(Both = mean(value2, na.rm = TRUE),
+            .groups = "drop") %>% 
+  mutate(SES = scale(Both, center = TRUE, scale = TRUE)[, 1]) -> df_SES
+
+read_csv("united.csv", col_types = "cDcccdddddcddddddddlllld") %>% 
+  group_by(participant_name) %>% 
+  summarise(Total_image = n(),
+            Gaze_image = sum(gaze, na.rm = TRUE),
+            Face_image = sum(face_detect, na.rm = TRUE),
+            Both_image = sum(!is.na(Overlap)),
+            Overlap_image = sum(Overlap, na.rm = TRUE),
+            Prop_FaceLook = Overlap_image/Both_image * 100) -> d_gaze
+
+d_participant %>% 
+  left_join(df_SES, by = "participant_name") %>% 
+  mutate(Nonattuned_comment = mind_comment - app_comment,
+         PropNonattuned = Nonattuned_comment / Total_comment * 100) %>% 
+  select(participant_name, Month, SES, MM, PropNonattuned, Total_comment, app_comment, Nonattuned_comment) %>% 
+  left_join(d_gaze, by = "participant_name") -> df
+```
+
+# 記述統計
+## SES
+```{r, message=FALSE}
+# 両親の最終学歴の内訳
+d_SES %>%
+  filter(!is.na(value2)) %>%  
+  group_by(parent, category) %>% 
+  summarise(N = n(),
+            .groups = "drop_last") %>%
+  mutate(Total = sum(N),
+         Prop = N/Total) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = parent, y = Prop, fill = category)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_viridis_d() +
+  labs(y = "Proportion") +
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12))
+ggsave(here("Figure", "DescriptiveStatistics_SES.jpg"), dpi = 300, width = 6, height = 6)
+```
+
+## 発話
+```{r, message=FALSE, fig.width=8}
+# 要約統計量
+df %>% 
+  pivot_longer(ends_with("comment"), names_to = "Comment", values_to = "Count") %>%
+  mutate(Comment = case_when(Comment == "app_comment" ~ "Appropriate",
+                             Comment == "Nonattuned_comment" ~ "Nonattuned",
+                             Comment == "Total_comment" ~ "Total")) %>% 
+  group_by(Comment) %>% 
+  summarise(Mean = mean(Count),
+            SD = sd(Count),
+            Median = median(Count),
+            Max = max(Count),
+            Min = min(Count)) %>% 
+  kable()
+
+# 発話総数によって降順に参加者にIDを付与 
+df %>% 
+  select(participant_name, ends_with("comment")) %>% 
+  pivot_longer(c("app_comment", "Nonattuned_comment"), names_to = "Mind_comment", values_to = "Count") %>% 
+  mutate(Mind_comment = if_else(Mind_comment == "app_comment", "Appropriate", "Nonattuned")) %>% 
+  arrange(desc(Total_comment), Mind_comment) %>% 
+  mutate(id = rep(1:length(unique(participant_name)), each = 2)) %>%  
+  ggplot(aes(x = id)) +
+  geom_bar(aes(y = Total_comment/2), stat = "identity") +
+  geom_bar(aes(y = Count, fill = Mind_comment), stat = "identity", width = 0.6) +
+  labs(x = "Participant ID", y = "Number of comments", fill = "Mind-related\ncomments") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 600)) +
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12))
+ggsave(here("Figure", "DescriptiveStatistics_Comments.jpg"), dpi = 300, width = 12, height = 8)
+```
+
+# Tobii Glasses 2データ
+```{r, message=FALSE, fig.width=8}
+df %>% 
+  pivot_longer(c("Total_image", "Gaze_image", "Face_image", "Both_image"), names_to = "Image", values_to = "Count") %>% 
+  mutate(Image = str_replace_all(Image, pattern = "_image", replacement = " detected"),
+         Image = if_else(Image == "Total detected", "Total Image", Image)) %>% 
+  group_by(Image) %>% 
+  summarise(Mean = mean(Count),
+            SD = sd(Count),
+            Median = median(Count),
+            Max = max(Count),
+            Min = min(Count)) %>% 
+  kable()
+
+# 顔が映った枚数・両方が検出された枚数
+# 顔が映った枚数によって降順に参加者にIDを付与
+df %>% 
+  arrange(desc(Face_image)) %>% 
+  mutate(id = row_number()) %>% 
+  pivot_longer(c("Face_image", "Both_image"), names_to = "Image", values_to = "Count") %>% 
+  mutate(Image = fct_rev(str_replace_all(Image, pattern = "_image", replacement = " detected"))) %>% 
+  ggplot(aes(x = id, y = Count, fill = Image)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Participant ID", y = "Number of images", fill = "Image type") +
+  scale_fill_manual(values = c("grey50", "#F8766D")) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 200)) +
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12))
+ ggsave(here("Figure", "DescriptiveStatistics_FaceDetection.jpg"), dpi = 300, width = 12, height = 8) 
+
+# 視線検出率(Gaze deteted/Total image)
+df %>% 
+  mutate(Prop_GazeDetected = Gaze_image / Total_image) %>%
+  ggplot(aes(x = Prop_GazeDetected)) +
+  geom_histogram(binwidth = 0.02, color = "black") +
+  labs(x = "Proportion of gaze detected images", y = "Count") +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 14)) +
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12))
+ggsave(here("Figure", "DescriptiveStatistics_GazeDetection.jpg"), dpi = 300, width = 12, height = 8)
+```
+
+```{r, eval=FALSE}
+# ベン図
+read_csv("united.csv", col_types = "cDcccdddddcddddddddlllld") %>% 
+  select(image_name, gaze, face_detect, Overlap) %>% 
+  mutate(Overlap = if_else(is.na(Overlap), 0, Overlap)) -> d_img
+list(`Gaze detected` = d_img$image_name[d_img$gaze == 1],
+     `Face detected` = d_img$image_name[d_img$face_detect == 1],
+     `Face looking` = d_img$image_name[d_img$Overlap == 1]) %>% 
+  venn.diagram(filename = here("Figure", "DescriptiveStatistics_ImageProp.png"), fill = c(2, 4, 3), cat.dist = c(0.075, 0.075, -0.15), alpha = 0.4, disable.logging = TRUE)
+```
+
