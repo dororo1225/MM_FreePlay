@@ -35,9 +35,10 @@ par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
 ```
 
 - Participant_test04:顔が一度も検出されなかった
--
--
--
+- Participant_test16:Tobii Glassesを怖がって泣いてしまい，実験中止
+- Participant_test26:GazeSampleが56%だった(Gaze Sample70%以上を参加者として設定)
+- Participant_test28:GazeSampleが44%だった(Gaze Sample70%以上を参加者として設定)
+- Participant_test39:キャリブレーション失敗・GazeSampleが21%だった(Gaze Sample70%以上を参加者として設定)
 
 # データ整形
 ```{r}

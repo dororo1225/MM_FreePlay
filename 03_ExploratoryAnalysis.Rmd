@@ -6,26 +6,37 @@ output: html_document
 ---
 
 
-```{r}
+```{r, message=FALSE, warning=FALSE}
 library(tidyverse)
 library(lubridate)
 library(here)
 library(lme4)
 library(car)
 library(performance)
+library(parameters)
 library(effectsize)
+library(knitr)
 ```
 
 # 除外する参加者のIDを指定
 ```{r}
 par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
+```
 
-w_size <- seq(1, 3, by = 0.5)
-w_size <- 3
+- Participant_test04:顔が一度も検出されなかった
+- Participant_test16:Tobii Glassesを怖がって泣いてしまい，実験中止
+- Participant_test26:GazeSampleが56%だった(Gaze Sample70%以上を参加者として設定)
+- Participant_test28:GazeSampleが44%だった(Gaze Sample70%以上を参加者として設定)
+- Participant_test39:キャリブレーション失敗・GazeSampleが21%だった(Gaze Sample70%以上を参加者として設定)
+
+# 設定
+
+```{r}
+w_size <- seq(0.5, 3, by = 0.5)
 ```
 
 ```{r}
-read_csv("d_script.csv", col_types = "ccdd") %>% 
+read_csv("d_script.csv", col_types = "ccdd_") %>% 
   mutate(time_tmp1 = as.numeric(hms(time)),
          time_tmp2 = if_else(order == 2, time_tmp1 + 10 * 60, time_tmp1),
          comment_timestamp = time_tmp2 * 1000 * 1000) %>% 
@@ -39,17 +50,10 @@ read_csv("united.csv", col_types = "cDcccdddddcddddddddlllld") %>%
 
 d_gaze %>% 
   select(participant_name, MM) %>% 
-  distinct()-> d_participant
+  distinct() -> d_participant
 ```
 
-```{r}
-d_comment %>% 
-  filter(!is.na(category)) %>% 
-  pull(participant_name) %>% 
-  unique()
-```
-
-```{r}
+```{r, eval=FALSE}
 for (j in 1:length(w_size)){
   w_size_tmp <- w_size[j]
   
@@ -74,7 +78,7 @@ for (j in 1:length(w_size)){
 
   bind_cols(d_comment, d_mmtime) %>% 
     mutate(w_size_set = w_size_tmp,
-           category = if_else(category == 1, "Appropriate", "Others")) %>% 
+           category = if_else(category == 1, "Appropriate", "the Others")) %>% 
     write_csv(here("Result", filename))
 }
 ```
@@ -89,45 +93,145 @@ df_mm %>%
             NA_count = sum(is.na(Prop_Overlap)),
             Cooccurrence_count = if_else(Comment_count == NA_count, NA_integer_, sum(Prop_Overlap > 0, na.rm = TRUE)),
             Prop_Cooccurrence = Cooccurrence_count / Comment_count,
-            .groups = "drop") -> df_cooccurence
-# 全ての発話において，顔または視線が検出されていないとき，Prop_CooccurenceはNAとなる
-df_cooccurence %>% 
+            .groups = "drop") -> df_cooccurrence
+# 発話付近の全ての画像において，顔または視線が検出されていないとき，Prop_CooccurenceはNAとなる
+
+# 全発話で，発話付近の画像が「顔または視線が検出されていない画像」ばかりだった参加者をN_allNA列にカウント
+df_cooccurrence %>% 
   group_by(w_size_set, category) %>% 
   summarise(N_participant = length(unique(participant_name)),
             N_allNA = sum(is.na(Prop_Cooccurrence)),
-            .groups = "drop")
-  
-df_cooccurence %>%  
+            .groups = "drop") %>% 
+  kable()
+
+# 閾値ごとに
+df_cooccurrence %>%  
   filter(!is.na(Prop_Cooccurrence)) %>% 
   filter(!is.na(category)) %>% 
   left_join(d_participant, by = "participant_name") %>% 
   ggplot(aes(x = category, y = Prop_Cooccurrence, color = MM)) +
   geom_point() +
   geom_line(aes(group = participant_name)) +
-  facet_wrap(~w_size_set)
-  labs(x = "発話の種類", y = "発話付近に顔を注視した割合") +
-  theme(axis.title = element_text(size = 15, face = "bold"),
-        axis.text = element_text(size = 12, color = "black"))
+  facet_wrap(~w_size_set) +
+  labs(x = "Comment type", y = "Proportion odf comments with face looking") +
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        strip.text = element_text(size = 15, face = "bold"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12))
+ggsave(here("Figure", "ExploratoryAnalysis_AllThresholds.jpg"), dpi = 300, width = 12, height = 8)
 ```
 
 ```{r}
-df_cooccurence %>%  
+df_cooccurrence %>% 
   filter(!is.na(Prop_Cooccurrence)) %>% 
-  filter(!is.na(category)) %>% 
+  left_join(d_participant, by = "participant_name") %>% 
+  group_by(w_size_set) %>% 
+  nest() %>% 
+  mutate(fit = map(data, ~glmer(cbind(Cooccurrence_count, Comment_count - Cooccurrence_count) ~ category * MM + (1 |participant_name),
+                             data = ., family = "binomial")),
+         LRT = map(fit, ~Anova(.))) %>% 
+  unnest(cols = "LRT") %>% 
+  ungroup() %>% 
+  mutate(Effect = rep(c("category", "MM", "category:MM"), times = length(w_size)),
+         significant = if_else(`Pr(>Chisq)` < 0.05, 1, 0)) %>% 
+  select(w_size_set, Effect, Chisq, Df, `Pr(>Chisq)`, significant) %>% 
+  kable()
+```
+
+どの時間窓でもcategoryの効果は頑健に検出できる
+
+# ひとまず時間窓を1.5秒（発話前後3秒間で可視化）
+
+```{r}
+df_cooccurrence %>%
+  filter(w_size_set ==  1.5) %>% 
+  filter(!is.na(Prop_Cooccurrence)) %>% 
   left_join(d_participant, by = "participant_name") -> df
 
-fit <- glmer(cbind(Cooccurrence_count, Comment_count - Cooccurrence_count) ~ category * MM + (1 |participant_name),
+fit <- glmer(cbind(Cooccurrence_count, Comment_count - Cooccurrence_count) ~ category + (1 |participant_name),
              data = df, family = "binomial")
 check_overdispersion(fit)
-
-
-fit <- lmer(Prop_Cooccurrence ~ category * MM + (1  | participant_name), data = df)
-
 Anova(fit)
-
 summary(fit)
+model_parameters(fit, standardize = "refit")
 
-library(modelbased)
-estimate_contrasts(fit, contrast = c("category"), at = "MM", length = 3, adjust = "holm")
+ggplot(df, aes(x = category, y = Prop_Cooccurrence)) +
+  geom_point(size = 2) +
+  geom_line(aes(group = participant_name), lwd = 1) +
+  labs(x = "Comment type", y = "Proportion odf comments with face looking") +
+  theme_bw() + 
+  theme(panel.grid = element_blank(),
+        axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        strip.text = element_text(size = 15, face = "bold"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12))
+ggsave(here("Figure", "ExploratoryAnalysis_1.5s.jpg"), dpi = 300, width = 6, height = 6)
+```
+
+# surrogation analysis
+```{r}
+standardize_parameters(fit) %>% 
+  filter(Parameter == "categoryThe others") %>% 
+  pull(Std_Coefficient) -> effect_obs
+
+df_rnd <- tibble(participant_name = character(),
+                 category_rnd = character(),
+                 Comment_count = numeric(),
+                 NA_count = numeric(),
+                 Cooccurrence_count = numeric(),
+                 Prop_Cooccurrence = numeric(),
+                 N_rnd = numeric())
+
+set.seed(1234)
+for (i in 1:1000){
+  df_mm %>%
+    filter(w_size_set == 1.5) %>% 
+    group_by(participant) %>% 
+    mutate(Total_comment = n(),
+           category_rnd = sample(category, size = Total_comment)) %>% 
+    group_by(participant_name, category_rnd) %>%
+    summarise(Comment_count = n(),
+              NA_count = sum(is.na(Prop_Overlap)),
+              Cooccurrence_count = if_else(Comment_count == NA_count, NA_integer_, sum(Prop_Overlap > 0, na.rm = TRUE)),
+              Prop_Cooccurrence = Cooccurrence_count / Comment_count,
+              .groups = "drop") %>% 
+    mutate(N_rnd = i) -> df_rnd_tmp
+  df_rnd <- bind_rows(df_rnd, df_rnd_tmp)
+}
+
+df_rnd %>% 
+  filter(!is.na(Prop_Cooccurrence)) %>% 
+  left_join(d_participant, by = "participant_name") %>% 
+  group_by(N_rnd) %>% 
+  nest() %>% 
+  mutate(fit = map(data, ~glmer(cbind(Cooccurrence_count, Comment_count - Cooccurrence_count) ~ category_rnd + (1 |participant_name),
+                                data = ., family = "binomial")),
+         effectsize = map(fit, ~standardize_parameters(.))) %>%
+  unnest(effectsize) %>% 
+  ungroup() -> df_effect_rnd
+
+df_effect_rnd %>% 
+  filter(Parameter == "category_rndThe others") %>% 
+  summarise(Mean = mean(Std_Coefficient),
+            Median = median(Std_Coefficient),
+            lwr = quantile(Std_Coefficient, probs = 0.025),
+            upr = quantile(Std_Coefficient, probs = 0.975)) %>% 
+  mutate(effect_obs = effect_obs) %>% 
+  kable()
+
+df_effect_rnd %>% 
+  filter(Parameter == "category_rndThe others") %>% 
+  ggplot(aes(x = Std_Coefficient)) +
+  geom_histogram(binwidth = 0.05, fill = "white", color = "black") +
+  geom_vline(xintercept = effect_obs, lty = 2, color = "red") +
+  theme(axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 12))
+ggsave(here("Figure", "ExploratoryAnalysis_Surrogation_1.5s.jpg"), dpi = 300, width = 6, height = 6)
 ```
 

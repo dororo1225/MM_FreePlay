@@ -19,9 +19,10 @@ par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
 ```
 
 - Participant_test04:顔が一度も検出されなかった
--
--
--
+- Participant_test16:Tobii Glassesを怖がって泣いてしまい，実験中止
+- Participant_test26:GazeSampleが56%だった(Gaze Sample70%以上を参加者として設定)
+- Participant_test28:GazeSampleが44%だった(Gaze Sample70%以上を参加者として設定)
+- Participant_test39:キャリブレーション失敗・GazeSampleが21%だった(Gaze Sample70%以上を参加者として設定)
 
 # データ整形
 ```{r}
@@ -45,9 +46,9 @@ d_participant %>%
 d_SES %>%
   arrange(participant_name, parent) %>% 
   group_by(participant_name) %>% 
-  summarise(Both = mean(value2, na.rm = TRUE),
+  summarise(SES = mean(value2, na.rm = TRUE),
             .groups = "drop") %>% 
-  mutate(SES = scale(Both, center = TRUE, scale = TRUE)[, 1]) -> df_SES
+  mutate(SES_z = scale(SES, center = TRUE, scale = TRUE)[, 1]) -> df_SES
 
 read_csv("united.csv", col_types = "cDcccdddddcddddddddlllld") %>% 
   group_by(participant_name) %>% 
@@ -56,14 +57,15 @@ read_csv("united.csv", col_types = "cDcccdddddcddddddddlllld") %>%
             Face_image = sum(face_detect, na.rm = TRUE),
             Both_image = sum(!is.na(Overlap)),
             Overlap_image = sum(Overlap, na.rm = TRUE),
-            Prop_FaceLook = Overlap_image/Both_image * 100) -> d_gaze
+            Prop_FaceLook = Overlap_image/Both_image) -> d_gaze
 
 d_participant %>% 
   left_join(df_SES, by = "participant_name") %>% 
   mutate(Nonattuned_comment = mind_comment - app_comment,
          PropNonattuned = Nonattuned_comment / Total_comment * 100) %>% 
-  select(participant_name, Month, SES, MM, PropNonattuned, Total_comment, app_comment, Nonattuned_comment) %>% 
+  select(participant_name, Month, SES, SES_z, MM, PropNonattuned, Total_comment, app_comment, Nonattuned_comment) %>% 
   left_join(d_gaze, by = "participant_name") -> df
+
 ```
 
 # 記述統計
