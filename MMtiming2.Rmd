@@ -1,0 +1,100 @@
+---
+title: "MM_FreePlay"
+author: "Hiroki YAMAMOTO"
+date: "2021/11/30"
+output: html_document
+---
+```{r}
+library(tidyverse)
+library(here)
+library(lubridate)
+```
+
+```{r}
+par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
+
+here("Coding_script", list.files(here("Coding_script"), pattern = "Script")) %>% 
+  map_df(~read_csv(.x, col_types = "ccdd_")) -> d_script
+
+d_script %>% 
+  mutate(time_tmp1 = as.numeric(hms(time)),
+         time_tmp2 = if_else(order == 2, time_tmp1 + 10 * 60, time_tmp1),
+         utt_timestamp = time_tmp2 * 1000 * 1000) %>% 
+  select(!contains("_tmp")) %>% 
+  mutate(participant_name = str_c("participant_test_", str_sub(participant, start = -2, end = -1)),
+         participant_name = if_else(participant == "participant19", "participant_test_18 (2)", participant_name)) %>% 
+  filter(!participant_name %in% par_remove) %>% 
+  mutate(id = row_number()) -> d_time
+
+read_csv("result/united.csv", col_types = "cDcccdddddcddddddddlllld") %>% 
+  select(participant_name, image_name, frame_id, ends_with("timestamp"), gaze, face_detect, Overlap, MM) -> df
+
+w_size <- 3 # window size(seconds)
+```
+
+```{r}
+tibble(N_window = numeric(),
+       Prop_NA = numeric(),
+       Prop_Overlap = numeric()) -> d_mmtime
+
+for (i in 1:nrow(d_time)){
+  d_time %>% 
+    filter(id == i) -> d_target
+  df %>% 
+    filter(participant_name == d_target$participant_name) %>% 
+    mutate(diff_time = movie_timestamp - d_target$utt_timestamp) %>% 
+    filter(diff_time > - w_size * 1000 * 1000 & diff_time < w_size * 1000 * 1000) %>% 
+    summarise(N_window = n(),
+              Prop_NA = sum(is.na(Overlap))/N_window,
+              Prop_Overlap = if_else(Prop_NA == 1, NA_real_, sum(Overlap, na.rm = TRUE)/N_window)) -> d_tmp
+  bind_rows(d_mmtime, d_tmp) -> d_mmtime
+}
+
+bind_cols(d_time, d_mmtime) %>% 
+  mutate(category = if_else(category == 1, "MM", "non-MM")) -> df_mm
+```
+
+```{r}
+df_mm %>% 
+  group_by(participant_name, category) %>%
+  summarise(Utterance_count = n(),
+            NA_count = sum(is.na(Prop_Overlap)),
+            Cooccurrence_count = if_else(Utterance_count == NA_count, NA_integer_, sum(Prop_Overlap > 0, na.rm = TRUE)),
+            Prop_Cooccurrence = Cooccurrence_count / Utterance_count,
+            .groups = "drop") %>%  
+  filter(!is.na(Prop_Cooccurrence)) %>% 
+  filter(!is.na(category)) %>% 
+  ggplot(aes(x = category, y = Prop_Cooccurrence)) +
+  geom_point() +
+  geom_line(aes(group = participant_name)) +
+  labs(x = "発話の種類", y = "発話付近に顔を注視した割合") +
+  theme(axis.title = element_text(size = 15, face = "bold"),
+        axis.text = element_text(size = 12, color = "black"))
+ggsave("figure2.jpg", dpi = 300, width = 8, height = 6)
+
+```
+
+```{r}
+df_mm %>% 
+  group_by(participant_name, category) %>%
+  summarise(Utterance_count = n(),
+            NA_count = sum(is.na(Prop_Overlap)),
+            Cooccurrence_count = if_else(Utterance_count == NA_count, NA_integer_, sum(Prop_Overlap > 0, na.rm = TRUE)),
+            Prop_Cooccurrence = Cooccurrence_count / Utterance_count,
+            .groups = "drop") %>%  
+  filter(!is.na(Prop_Cooccurrence)) %>% 
+  filter(!is.na(category)) %>% 
+  group_by(participant_name) %>% 
+  mutate(N = n()) %>% 
+  ungroup() %>% 
+  filter(N == 2) -> df_test
+
+filter(df_test, category == "MM") -> d_test_MM
+
+filter(df_test, category != "MM") -> d_test_nMM
+
+t.test(d_test_MM$Prop_Cooccurrence, d_test_nMM$Prop_Cooccurrence, paired = TRUE)
+
+  
+```
+

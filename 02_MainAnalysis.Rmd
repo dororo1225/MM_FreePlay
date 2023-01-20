@@ -42,9 +42,10 @@ par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
 
 # データ整形
 ```{r}
-read_csv("ParticipantInformation.csv", col_types = "cdcdddccddddddddddddddd") %>% 
+read_csv("ParticipantInformation.csv", col_types = "cdcdddccdddddddddddddd_") %>% 
   filter(type == "test") %>% # 予備実験の参加者を除外
-  filter(!participant_name %in% par_remove) -> d_participant 
+  filter(!participant_name %in% par_remove) %>% 
+  mutate(MM = app_comment / Total_comment * 100) -> d_participant 
 
 # SESの算出
 d_participant %>% 
@@ -101,7 +102,7 @@ expand_grid(MM = seq(min(df$MM), max(df$MM), length = 100),
             SES = mean(df$SES)) %>% 
   as_tibble() -> nd
 
-bigBoot_MM <- bootMer(fit_MM, myFunc, nsim = 1000, parallel = "multicore", ncpus = 4)
+bigBoot_MM <- bootMer(fit_MM, myFunc, nsim = 10000, parallel = "multicore", ncpus = 4)
 save(bigBoot_MM, file = here("BootData", "bigBoot_MM.RData"))
 ```
 
@@ -130,7 +131,7 @@ model_parameters(fit_Nonattuned, standardize = "refit")
 expand_grid(PropNonattuned = seq(min(df$PropNonattuned), max(df$PropNonattuned), length = 100),
             SES = mean(df$SES)) -> nd
 
-bigBoot_Nonattuned <- bootMer(fit_Nonattuned, myFunc, nsim = 1000, parallel = "multicore", ncpus = 4)
+bigBoot_Nonattuned <- bootMer(fit_Nonattuned, myFunc, nsim = 10000, parallel = "multicore", ncpus = 4)
 save(bigBoot_Nonattuned, file = here("BootData", "bigBoot_Nonattuned.RData"))
 ```
 

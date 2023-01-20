@@ -26,9 +26,10 @@ par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
 
 # データ整形
 ```{r}
-read_csv("ParticipantInformation.csv", col_types = "cdcdddccddddddddddddddd") %>% 
+read_csv("ParticipantInformation.csv", col_types = "cdcdddccdddddddddddddd_") %>% 
   filter(type == "test") %>% # 予備実験の参加者を除外
-  filter(!participant_name %in% par_remove) -> d_participant 
+  filter(!participant_name %in% par_remove) %>% 
+  mutate(MM = app_comment / Total_comment * 100) -> d_participant 
 
 # SESの算出
 d_participant %>% 

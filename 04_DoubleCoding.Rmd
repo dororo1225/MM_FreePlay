@@ -1,0 +1,70 @@
+---
+title: "DoucleCoding"
+author: "Hiroki YAMAMOTO"
+date: "2022/6/8"
+output: html_document
+---
+```{r, message=FALSE}
+library(here)
+library(tidyverse)
+library(irr)
+```
+
+```{r, echo=FALSE}
+# DoucleCoding Check用のcsv作成
+# # participant_exclusion
+# par_remove <- str_c("participant_test_", c("04", "16", "26", "28", "39"))
+# 
+# par_dc <- str_c("participant", c("02", "05", "06", "08", "10", "24", "30", "42", "43", "44"))
+# 
+# # read.csv("d_script.csv") %>% 
+# #   filter(!participant %in% par_remove) %>% 
+# #   filter(participant %in% par_dc) %>% 
+# #   rename(app = "category") %>% 
+# #   mutate(app_suna = "",
+# #          app_ono = "",
+# #          non_suna = "",
+# #          non_ono = "",
+# #          .before = "utterance") %>% 
+# #   write.csv("Script_for_DoubleCoding.csv", row.names = FALSE)
+# 
+# read_csv("ParticipantInformation.csv", col_types = "cdcdddccddddddddddddddd") %>% 
+#   filter(type == "test") %>% # 予備実験の参加者を除外
+#   filter(!participant_name %in% par_remove) -> d_participant 
+# 
+# par_dc <- str_c("participant_test_", c("02", "05", "06", "08", "10", "24", "30", "42", "43", "44"))
+```
+
+```{r}
+# 3 categories (appropriate / non-appropriate/ others)
+read_csv("Script_for_DoubleCoding.csv", col_types = "ccddddd_") %>% 
+  mutate(coder1 = case_when(app_suna == 1 ~ "appropriate",
+                            non_suna == 1 ~ "non-appropriate",
+                            TRUE ~ "others"),
+         coder2 = case_when(app_ono == 1 ~ "appropriate",
+                            non_ono == 1 ~ "non-appropriate",
+                            TRUE ~ "others"),
+         ) %>% 
+  select(starts_with("coder")) -> df_dc
+
+df_dc %>% 
+  kappa2()
+
+df_dc %>% 
+  agree()
+```
+
+```{r}
+# 2 categories (mind-related / others)
+read_csv("Script_for_DoubleCoding.csv", col_types = "ccddddd_") %>% 
+  mutate(coder1 = if_else(app_suna == 1 | non_suna == 1, "mind-related", "others"),
+         coder2 = if_else(app_ono == 1 | non_ono == 1, "mind-related", "others")) %>% 
+  select(starts_with("coder")) -> df_dc1
+
+df_dc1 %>% 
+  kappa2()
+
+df_dc1 %>% 
+  agree()
+```
+
